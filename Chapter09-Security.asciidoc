@@ -1,0 +1,180 @@
+== Security
+
+_"There is no real security except for whatever you build inside yourself." - Gilda Radner_
+
+=== Use Case / Requirements
+
+* Limit unauthorized peoples access to change/create data
+
+----
+As a 3. party Integrator I should not be able to Add/Change/Delete a Conference
+  without being authorized
+
+As a 3. party Integrator I should not be able Add/Change/Delete a Session
+  to Conferences without being authorized
+
+As a 3. party Integrator I should not be able Add/Change/Delete a Attachment
+ to Sessions and Conferences aithout being authorized
+
+As a 3. party Integrator I should not be able Add/Change/Delete a Venue
+  (and attch to Conference and Session) without being authorized
+----
+
+=== Background
+
+* Reasons for Security
+* Different security models
+** Roles
+** Permissions
+** ?
+* Authentication vs Auhtorization
+** User verification vs access rights
+* Layers of security
+** User authentication
+** Protocol Enrcyption
+** Backend Storage
+* Local vs Remote
+** Local User Data base
+** Enterprise wide IDM
+** Global externalized Authentication (twitter, facebook)
+*** security providers
+
+=== Implementation
+
+* Agorava - Social Authentication
+** CDI integration
+** Support for Twitter, Facebook, Linkedin
+** Attempted standarized via JSR-XX, Drop, to early
+
+* PicketLink - Application level security
+** JBoss's answer to securiy on all levels
+*** IDM
+*** Application Level
+*** Container Level
+
+* Agorava and PicketLink hidden in Security Module
+** Auto attaches where it's needed via Interceptors, DefaultExceptionMappers and Servlets
+** @Produces @Current User
+*** Only point 'shared' between other modules. Someone produces a @Current User == Authorized request
+*** Makes it easy to test Security Related entry points via
+**** Deploy custom Test scoped @Current User producer
+**** Use warp to setup authorized or not scenarios
+
+* OAuth via Twitter for UI
+** Agovara hidden behind PicketLink API's
+** Generates a users API token on login
+* Option to use GeekSeek API Tokens for REST api calls
+
+=== Requirement Test Scenarios
+
+==== Overview
+
+* PUT data
+* GET data
+* POST data
+* PATCH data
+* DELETE data
+* OPTIONS filtered
+
+* Login
+** Exception cases
+
+
+==== Setup
+
+* Warp, Resolver, nothing new
+* CDI Producers to Produce @Current User
+
+* Filtering OPTIONS Allow header
+** Should not allow POST, PUT, PATCH or DELETE in Allow header if unauthorized
+*** https://github.com/arquillian/continuous-enterprise-development/blob/master/code/application/service/security/src/test/java/org/cedj/geekseek/service/security/test/integration/SecuredOptionsTestCase.java[SecuredOptionsTestCase]
+**** Test Double TestResource (REST Service)
+**** RESTEasy impl of DefaultOptionsHandler
+***** Used when the Service itself has no @OPTIONS implements
+
+[source,java]
+----
+    @Test
+    public void shouldNotContainStateChangingMethodsForUnauthorizedAccess() throws Exception { .. }
+
+    @Test
+    public void shouldContainStateChangingMethodsForAuthorizedAccess() throws Exception { ... }
+
+----
+
+
+* UnAuthorized(401) when attempting to POST, PUT, PATCH or DELETE a resource if unauthorized
+*** https://github.com/arquillian/continuous-enterprise-development/blob/master/code/application/service/security/src/test/java/org/cedj/geekseek/service/security/test/integration/SecuredMethodsTestCase.java[SecuredMethodsTestCase]
+**** Test Double TestResource (REST Service)
+**** Uses our own @ResourceModel RESTInterceptor chain
+
+[source, java]
+----
+    @Test
+    public void shouldAllowOPTIONSForNonauthorizedAccess() throws Exception { .. }
+
+    @Test
+    public void shouldAllowOPTIONSForAuthorizedAccess() throws Exception { .. }
+
+    @Test
+    public void shouldAllowGETForUnauthorizedAccess() throws Exception { .. }
+
+    @Test
+    public void shouldAllowGETForAuthorizedAccess() throws Exception { .. }
+
+    @Test
+    public void shouldNotAllowPUTForUnauthorizedAccess() throws Exception { .. }
+
+    @Test
+    public void shouldAllowPUTForAuuthorizedAccess() throws Exception { .. }
+
+    @Test
+    public void shouldNotAllowPOSTForUnauthorizedAccess() throws Exception { .. }
+
+    @Test
+    public void shouldAllowPOSTForAuthorizedAccess() throws Exception { .. }
+
+    @Test
+    public void shouldNotAllowDELETEForUnauthorizedAccess() throws Exception { .. }
+
+    @Test
+    public void shouldAllowDELETEForAuthorizedAccess() throws Exception { .. }
+
+    @Test
+    public void shouldNotAllowPATCHForUnauthorizedAccess() throws Exception { .. }
+
+    @Test
+    public void shouldAllowPATCHForAuthorizedAccess() throws Exception { .. }
+----
+
+* WhoAmI Resource, check to see who you are authorized as
+** Used by UI to determine login info
+** 302 redirect to User Resource on authorized
+** 401 when not authorized
+*** https://github.com/arquillian/continuous-enterprise-development/blob/master/code/application/service/security/src/test/java/org/cedj/geekseek/service/security/test/integration/WhoAmIResourceTestCase.java[WhoAmIResourceTestCase]
+
+[source, java]
+----
+    @Test
+    public void shouldReponseWithNotAuthorizedWhenNoUserFound() throws Exception { .. }
+
+    @Test
+    public void shouldReponseSeeOtherWhenUserFound() throws Exception { .. }
+----
+
+
+* OAuth Login
+** Should redirect back to where user came from on auth ok
+** Handle exception cases and auth responses from PicketLink Authenticator impl
+** TestCase use custom Authenticator to control the scenarios https://github.com/arquillian/continuous-enterprise-development/blob/master/code/application/service/security/src/test/java/org/cedj/geekseek/service/security/test/integration/ControllableAuthenticator.java[ControllableAuthenticator]
+*** https://github.com/arquillian/continuous-enterprise-development/blob/master/code/application/service/security/src/test/java/org/cedj/geekseek/service/security/test/integration/AuthServletTestCase.java[AuthServletTestCase]
+
+[source, java]
+----
+    @Test
+    public void shouldRedirectToRefererOnAuthSuccess() throws Exception { .. }
+
+    @Test
+    public void shouldReturnUnAuthorizedOnAuthFailure() throws Exception { .. }
+
+----
