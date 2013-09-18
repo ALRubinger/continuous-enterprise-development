@@ -2,6 +2,23 @@
 
 _"There is no real security except for whatever you build inside yourself." - Gilda Radner_
 
+* Reasons for Security
+* Different security models
+** Roles
+** Permissions
+** ?
+* Authentication vs Auhtorization
+** User verification vs access rights
+* Layers of security
+** User authentication
+** Protocol Encryption
+** Backend Storage
+* Local vs Remote
+** Local User Data base
+** Enterprise wide IDM
+** Global externalized Authentication (twitter, facebook)
+*** security providers
+
 === Use Case / Requirements
 
 * Limit unauthorized peoples access to change/create data
@@ -19,25 +36,6 @@ As a 3. party Integrator I should not be able Add/Change/Delete a Attachment
 As a 3. party Integrator I should not be able Add/Change/Delete a Venue
   (and attch to Conference and Session) without being authorized
 ----
-
-=== Background
-
-* Reasons for Security
-* Different security models
-** Roles
-** Permissions
-** ?
-* Authentication vs Auhtorization
-** User verification vs access rights
-* Layers of security
-** User authentication
-** Protocol Enrcyption
-** Backend Storage
-* Local vs Remote
-** Local User Data base
-** Enterprise wide IDM
-** Global externalized Authentication (twitter, facebook)
-*** security providers
 
 === Implementation
 
