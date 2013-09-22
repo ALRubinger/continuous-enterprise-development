@@ -2,6 +2,8 @@
 
 _"There is no real security except for whatever you build inside yourself." - Gilda Radner_
 
+
+
 * Reasons for Security
 * Different security models
 ** Roles
@@ -42,7 +44,7 @@ As a 3. party Integrator I should not be able Add/Change/Delete a Venue
 * Agorava - Social Authentication
 ** CDI integration
 ** Support for Twitter, Facebook, Linkedin
-** Attempted standarized via JSR-XX, Drop, to early
+** Attempted standarized via JSR-XX, Drop, too early
 
 * PicketLink - Application level security
 ** JBoss's answer to securiy on all levels
@@ -53,6 +55,32 @@ As a 3. party Integrator I should not be able Add/Change/Delete a Venue
 * Agorava and PicketLink hidden in Security Module
 ** Auto attaches where it's needed via Interceptors, DefaultExceptionMappers and Servlets
 ** @Produces @Current User
+
++org.cedj.geekseek.service.security.oauth.SessionProducer+
+[source,java]
+----
+import javax.enterprise.context.SessionScoped;
+import javax.enterprise.inject.Default;
+import javax.enterprise.inject.Produces;
+
+import org.agorava.Twitter;
+import org.agorava.core.api.oauth.OAuthSession;
+import org.agorava.core.cdi.Current;
+
+public class SessionProducer implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
+    @SessionScoped
+    @Produces
+    @Twitter
+    @Current
+    public OAuthSession produceOauthSession(@Twitter @Default OAuthSession session) {
+        return session;
+    }
+}
+----
+
 *** Only point 'shared' between other modules. Someone produces a @Current User == Authorized request
 *** Makes it easy to test Security Related entry points via
 **** Deploy custom Test scoped @Current User producer
@@ -62,6 +90,178 @@ As a 3. party Integrator I should not be able Add/Change/Delete a Venue
 ** Agovara hidden behind PicketLink API's
 ** Generates a users API token on login
 * Option to use GeekSeek API Tokens for REST api calls
+
++org.cedj.geekseek.service.security.oauth+
+[source,java]
+----
+import javax.annotation.PostConstruct;
+import javax.ejb.Singleton;
+import javax.ejb.Startup;
+import javax.enterprise.context.ApplicationScoped;
+import javax.enterprise.inject.Produces;
+
+import org.agorava.Twitter;
+import org.agorava.core.api.oauth.OAuthAppSettings;
+import org.agorava.core.oauth.SimpleOAuthAppSettingsBuilder;
+
+@ApplicationScoped
+@Startup @Singleton
+public class SettingsProducer implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
+    private static final String PROP_API_KEY = "AUTH_API_KEY";
+    private static final String PROP_API_SECRET = "AUTH_API_SECRET";
+    private static final String PROP_API_CALLBACK = "AUTH_CALLBACK";
+
+    @Produces @Twitter @ApplicationScoped
+    public static OAuthAppSettings createSettings() {
+        String apiKey = System.getenv(PROP_API_KEY);
+        String apiSecret = System.getenv(PROP_API_SECRET);
+        String apiCallback = System.getenv(PROP_API_CALLBACK);
+        if(apiCallback == null) {
+            apiCallback = "auth";
+        }
+
+        SimpleOAuthAppSettingsBuilder builder = new SimpleOAuthAppSettingsBuilder();
+        builder.apiKey(apiKey).apiSecret(apiSecret).callback(apiCallback);
+
+        return builder.build();
+    }
+
+    @PostConstruct
+    public void validateEnvironment() {
+        String apiKey = System.getenv(PROP_API_KEY);
+        if(apiKey == null) {
+            throw new IllegalStateException(PROP_API_KEY + " env variable must be set");
+        }
+        String apiSecret = System.getenv(PROP_API_SECRET);
+        if(apiSecret == null) {
+            throw new IllegalStateException(PROP_API_SECRET + " env variable must be set");
+        }
+    }
+}
+----
+
++org.cedj.geekseek.service.security.user.UserRegistration+ fired from OAuthAuthenticator:
+[source,java]
+----
+import javax.enterprise.event.Observes;
+import javax.inject.Inject;
+
+import org.agorava.core.api.oauth.OAuthToken;
+import org.agorava.twitter.model.TwitterProfile;
+import org.cedj.geekseek.domain.Repository;
+import org.cedj.geekseek.domain.user.model.User;
+import org.cedj.geekseek.service.security.oauth.SuccessfulAuthentication;
+
+public class UserRegistration {
+
+    @Inject
+    private Repository<User> repository;
+
+    //public void registerUser(@Observes SocialEvent<OAuthSession> event) { https://issues.jboss.org/browse/AGOVA-53
+    public void registerUser(@Observes SuccessfulAuthentication event) {
+        TwitterProfile profile = (TwitterProfile)event.getProfile();
+
+        User user = repository.get(profile.getScreenName());
+        if(user == null) {
+            user = new User(profile.getScreenName());
+        }
+        user.setName(profile.getFullName());
+        user.setBio(profile.getDescription());
+        user.setAvatarUrl(profile.getProfileImageUrl());
+        OAuthToken token = event.getToken();
+        user.setAccessToken(token.getSecret() + "|" + token.getToken());
+        if(user.getApiToken() == null) {
+            user.setApiToken(UUID.randomUUID().toString());
+        }
+
+        repository.store(user);
+    }
+}
+----
+
++org.cedj.geekseek.service.security.picketlink.OAuthAuthenticator+
+[source,java]
+----
+@ApplicationScoped
+@PicketLink
+public class OAuthAuthenticator extends BaseAuthenticator {
+
+    private static final String AUTH_COOKIE_NAME = "auth";
+    private static final String LOCATION = "Location";
+
+    @Inject @PicketLink
+    private Instance<HttpServletRequest> requestInst;
+
+    @Inject @PicketLink
+    private Instance<HttpServletResponse> responseInst;
+
+    @Inject
+    private Repository<User> repository;
+
+    @Inject
+    private OAuthService service;
+
+    @Inject @Twitter @Current
+    private OAuthSession session;
+
+    @Inject
+    private Event<SuccessfulAuthentication> successful;
+
+    @Override
+    public void authenticate() {
+        HttpServletRequest request = requestInst.get();
+        HttpServletResponse response = responseInst.get();
+
+        if(request == null || response == null) {
+            setStatus(AuthenticationStatus.FAILURE);
+        } else {
+            if(session.isConnected()) { // already got a active session going
+                OAuthSession session = service.getSession();
+                UserProfile userProfile = session.getUserProfile();
+
+                User user = repository.get(userProfile.getId());
+                if(user == null) {  // can't find a matching account, shouldn't really happen
+                    setStatus(AuthenticationStatus.FAILURE);
+                } else {
+                    setAccount(new UserAccount(user));
+                    setStatus(AuthenticationStatus.SUCCESS);
+                }
+            } else {
+                // Callback
+                String verifier = request.getParameter(service.getVerifierParamName());
+                if(verifier != null) {
+                    session.setVerifier(verifier);
+                    service.initAccessToken();
+
+                    // https://issues.jboss.org/browse/AGOVA-53
+                    successful.fire(new SuccessfulAuthentication(service.getSession().getUserProfile(), service.getAccessToken()));
+
+                    String screenName = ((TwitterProfile)service.getSession().getUserProfile()).getScreenName();
+                    User user = repository.get(screenName);
+                    if(user == null) { // can't find a matching account
+                        setStatus(AuthenticationStatus.FAILURE);
+                    } else {
+                        setAccount(new UserAccount(user));
+                        setStatus(AuthenticationStatus.SUCCESS);
+                        response.addCookie(new Cookie(AUTH_COOKIE_NAME, user.getApiToken()));
+                    }
+
+                } else {
+                    // initiate redirect request to 3. party
+                    String redirectUrl = service.getAuthorizationUrl();
+
+                    response.setStatus(302);
+                    response.setHeader(LOCATION, redirectUrl);
+                    setStatus(AuthenticationStatus.DEFERRED);
+                }
+            }
+        }
+    }
+}
+----
 
 === Requirement Test Scenarios
 
@@ -86,6 +286,81 @@ As a 3. party Integrator I should not be able Add/Change/Delete a Venue
 * Filtering OPTIONS Allow header
 ** Should not allow POST, PUT, PATCH or DELETE in Allow header if unauthorized
 *** https://github.com/arquillian/continuous-enterprise-development/blob/master/code/application/service/security/src/test/java/org/cedj/geekseek/service/security/test/integration/SecuredOptionsTestCase.java[SecuredOptionsTestCase]
+
+[source,java]
+----
+@RunAsClient
+@WarpTest
+@RunWith(Arquillian.class)
+public class SecuredOptionsTestCase {
+
+    @Deployment
+    public static WebArchive deploy() {
+        return ShrinkWrap.create(WebArchive.class)
+            .addClasses(
+                SecuredOptionsExceptionMapper.class,
+                SecuredOptionsTestCase.class,
+                SetupAuth.class,
+                TestResource.class,
+                TestApplication.class,
+                TestCurrentUserProducer.class)
+            .addAsLibraries(RestCoreDeployments.root())
+            .addAsLibraries(UserDeployments.domain())
+            .addAsWebInfResource(EmptyAsset.INSTANCE, "beans.xml");
+    }
+
+    @ArquillianResource
+    private URL baseURL;
+
+    @Test
+    public void shouldNotContainStateChangingMethodsForUnauthorizedAccess() throws Exception {
+        final URL testURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                    then().
+                        statusCode(Status.OK.getStatusCode()).
+                        header("Allow", allOf(
+                            not(containsString("POST")),
+                            not(containsString("PUT")),
+                            not(containsString("DELETE")),
+                            not(containsString("PATCH")))).
+                when().
+                    options(testURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(null));
+    }
+
+    @Test
+    public void shouldContainStateChangingMethodsForAuthorizedAccess() throws Exception {
+        final URL testURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                    then().
+                        statusCode(Status.OK.getStatusCode()).
+                        header("Allow", allOf(
+                            containsString("GET"),
+                            containsString("OPTIONS"),
+                            containsString("POST"),
+                            containsString("PUT"),
+                            containsString("DELETE"),
+                            containsString("PATCH"))).
+                when().
+                    options(testURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(new User("testuser")));
+    }
+
+    private URL createTestURL() throws MalformedURLException {
+        return new URL(baseURL, "api/test");
+    }
+}
+----
+
+
 **** Test Double TestResource (REST Service)
 **** RESTEasy impl of DefaultOptionsHandler
 ***** Used when the Service itself has no @OPTIONS implements
@@ -103,8 +378,259 @@ As a 3. party Integrator I should not be able Add/Change/Delete a Venue
 
 * UnAuthorized(401) when attempting to POST, PUT, PATCH or DELETE a resource if unauthorized
 *** https://github.com/arquillian/continuous-enterprise-development/blob/master/code/application/service/security/src/test/java/org/cedj/geekseek/service/security/test/integration/SecuredMethodsTestCase.java[SecuredMethodsTestCase]
+
+[source,java]
+----
+@RunAsClient
+@WarpTest
+@RunWith(Arquillian.class)
+public class SecuredMethodsTestCase {
+
+    @Deployment
+    public static WebArchive deploy() {
+        return ShrinkWrap.create(WebArchive.class)
+            .addClasses(
+                SecurityInterceptor.class,
+                SecuredMethodsTestCase.class,
+                SetupAuth.class,
+                TestResource.class,
+                TestApplication.class,
+                TestCurrentUserProducer.class)
+            .addAsLibraries(RestCoreDeployments.root())
+            .addAsLibraries(UserDeployments.domain())
+            .addAsWebInfResource(RestCoreDeployments.linkableBeansXml(), "beans.xml");
+    }
+
+    @ArquillianResource
+    private URL baseURL;
+
+    @Test
+    public void shouldAllowOPTIONSForNonauthorizedAccess() throws Exception {
+        final URL testURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                    then().
+                        statusCode(Status.OK.getStatusCode()).
+                when().
+                    options(testURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(null));
+    }
+
+    @Test
+    public void shouldAllowOPTIONSForAuthorizedAccess() throws Exception {
+        final URL testURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                    then().
+                        statusCode(Status.OK.getStatusCode()).
+                when().
+                    options(testURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(new User("testuser")));
+    }
+
+    @Test
+    public void shouldAllowGETForUnauthorizedAccess() throws Exception {
+        final URL testURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                    then().
+                        statusCode(Status.OK.getStatusCode()).
+                when().
+                    get(testURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(null));
+    }
+
+    @Test
+    public void shouldAllowGETForAuthorizedAccess() throws Exception {
+        final URL testURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                    then().
+                        statusCode(Status.OK.getStatusCode()).
+                when().
+                    get(testURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(new User("testuser")));
+    }
+
+    @Test
+    public void shouldNotAllowPUTForUnauthorizedAccess() throws Exception {
+        final URL testURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                    then().
+                        statusCode(Status.UNAUTHORIZED.getStatusCode()).
+                when().
+                    put(testURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(null));
+    }
+
+    @Test
+    public void shouldAllowPUTForAuuthorizedAccess() throws Exception {
+        final URL testURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                    then().
+                        statusCode(Status.OK.getStatusCode()).
+                when().
+                    put(testURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(new User("testuser")));
+    }
+
+    @Test
+    public void shouldNotAllowPOSTForUnauthorizedAccess() throws Exception {
+        final URL testURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                    then().
+                        statusCode(Status.UNAUTHORIZED.getStatusCode()).
+                when().
+                    post(testURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(null));
+    }
+
+    @Test
+    public void shouldAllowPOSTForAuthorizedAccess() throws Exception {
+        final URL testURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                    then().
+                        statusCode(Status.OK.getStatusCode()).
+                when().
+                    post(testURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(new User("testuser")));
+    }
+
+    @Test
+    public void shouldNotAllowDELETEForUnauthorizedAccess() throws Exception {
+        final URL testURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                    then().
+                        statusCode(Status.UNAUTHORIZED.getStatusCode()).
+                when().
+                    delete(testURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(null));
+    }
+
+    @Test
+    public void shouldAllowDELETEForAuthorizedAccess() throws Exception {
+        final URL testURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                    then().
+                        statusCode(Status.OK.getStatusCode()).
+                when().
+                    delete(testURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(new User("testuser")));
+    }
+
+    @Test
+    public void shouldNotAllowPATCHForUnauthorizedAccess() throws Exception {
+        final URL testURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                    then().
+                        statusCode(Status.UNAUTHORIZED.getStatusCode()).
+                when().
+                    patch(testURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(null));
+    }
+
+    @Test
+    public void shouldAllowPATCHForAuthorizedAccess() throws Exception {
+        final URL testURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                    then().
+                        statusCode(Status.OK.getStatusCode()).
+                when().
+                    patch(testURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(new User("testuser")));
+    }
+
+    private URL createTestURL() throws MalformedURLException {
+        return new URL(baseURL, "api/test");
+    }
+}
+----
+
 **** Test Double TestResource (REST Service)
 **** Uses our own @ResourceModel RESTInterceptor chain
+
++org.cedj.geekseek.service.security.interceptor.SecurityInterceptor+
+[source,java]
+----
+public class SecurityInterceptor implements RESTInterceptor {
+
+    @Inject @Current
+    private Instance<User> user;
+
+    @Override
+    public int getPriority() {
+        return 0;
+    }
+
+    @Override
+    public Object invoke(InvocationContext ic) throws Exception {
+
+        Method target = ic.getMethod();
+        if(isStateChangingMethod(target)) {
+            if(user.get() != null) {
+                return ic.proceed();
+            }
+            else {
+                return Response.status(Status.UNAUTHORIZED).build();
+            }
+        }
+        return ic.proceed();
+    }
+
+    private boolean isStateChangingMethod(Method target) {
+        return target.isAnnotationPresent(PUT.class) ||
+            target.isAnnotationPresent(POST.class) ||
+            target.isAnnotationPresent(DELETE.class) ||
+            target.isAnnotationPresent(PATCH.class);
+    }
+}
+----
+
+
 
 [source, java]
 ----
@@ -151,6 +677,68 @@ As a 3. party Integrator I should not be able Add/Change/Delete a Venue
 ** 401 when not authorized
 *** https://github.com/arquillian/continuous-enterprise-development/blob/master/code/application/service/security/src/test/java/org/cedj/geekseek/service/security/test/integration/WhoAmIResourceTestCase.java[WhoAmIResourceTestCase]
 
+[source,java]
+----
+@RunAsClient
+@WarpTest
+@RunWith(Arquillian.class)
+public class WhoAmIResourceTestCase {
+
+    @Deployment
+    public static WebArchive deploy() {
+        return ShrinkWrap.create(WebArchive.class)
+            .addClasses(
+                WhoAmIResource.class,
+                SetupAuth.class,
+                TestApplication.class,
+                TestCurrentUserProducer.class)
+            .addAsLibraries(RestCoreDeployments.root())
+            .addAsLibraries(UserDeployments.domain())
+            .addAsLibraries(UserRestDeployments.module())
+            .addAsWebInfResource(new File("src/test/resources/beans.xml"));
+    }
+
+    @ArquillianResource
+    private URL baseURL;
+
+    @Test
+    public void shouldReponseWithNotAuthorizedWhenNoUserFound() throws Exception {
+        final URL whoAmIURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                    then().
+                        statusCode(Status.UNAUTHORIZED.getStatusCode()).
+                when().
+                    get(whoAmIURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(null));
+    }
+
+    @Test
+    public void shouldReponseSeeOtherWhenUserFound() throws Exception {
+        final URL whoAmIURL = createTestURL();
+        Warp.initiate(new Activity() {
+            @Override
+            public void perform() {
+                    given().
+                        redirects().
+                            follow(false).
+                    then().
+                        statusCode(Status.SEE_OTHER.getStatusCode()).
+                when().
+                    get(whoAmIURL.toExternalForm());
+            }
+        }).inspect(new SetupAuth(new User("testuser")));
+    }
+
+    private URL createTestURL() throws MalformedURLException {
+        return new URL(baseURL, "api/security/whoami");
+    }
+}
+----
+
 [source, java]
 ----
     @Test
@@ -165,7 +753,130 @@ As a 3. party Integrator I should not be able Add/Change/Delete a Venue
 ** Should redirect back to where user came from on auth ok
 ** Handle exception cases and auth responses from PicketLink Authenticator impl
 ** TestCase use custom Authenticator to control the scenarios https://github.com/arquillian/continuous-enterprise-development/blob/master/code/application/service/security/src/test/java/org/cedj/geekseek/service/security/test/integration/ControllableAuthenticator.java[ControllableAuthenticator]
+
+[source,java]
+----
+@RequestScoped
+@PicketLink
+public class ControllableAuthenticator extends BaseAuthenticator {
+
+    private boolean wasCalled = false;
+    private boolean shouldFailAuth = false;
+
+    @Override
+    public void authenticate() {
+        wasCalled = true;
+        if(shouldFailAuth) {
+            setStatus(AuthenticationStatus.FAILURE);
+        } else {
+            setStatus(AuthenticationStatus.SUCCESS);
+            setAccount(new User());
+        }
+    }
+
+    public boolean wasCalled() {
+        return wasCalled;
+    }
+
+    public void setShouldFailAuth(boolean fail) {
+        this.shouldFailAuth = fail;
+    }
+
+}
+----
+
 *** https://github.com/arquillian/continuous-enterprise-development/blob/master/code/application/service/security/src/test/java/org/cedj/geekseek/service/security/test/integration/AuthServletTestCase.java[AuthServletTestCase]
+
+[source,java]
+----
+@RunAsClient
+@WarpTest
+@RunWith(Arquillian.class)
+public class AuthServletTestCase {
+
+    @Deployment
+    public static WebArchive deploy() {
+        return ShrinkWrap.create(WebArchive.class)
+            .addClasses(AuthServlet.class, HttpObjectHolder.class, ControllableAuthenticator.class)
+            .addAsWebInfResource(EmptyAsset.INSTANCE, "beans.xml")
+            .addAsLibraries(
+                Maven.resolver()
+                    .loadPomFromFile("pom.xml")
+                    .resolve("org.picketlink:picketlink-impl")
+                        .withTransitivity()
+                        .asFile());
+    }
+
+    @ArquillianResource
+    private URL baseURL;
+
+    @Test
+    public void shouldRedirectToRefererOnAuthSuccess() throws Exception {
+        Warp.initiate(new Activity() {
+
+            @Override
+            public void perform() {
+                try {
+                    final HttpURLConnection conn = (HttpURLConnection)new URL(baseURL, "auth").openConnection();
+                    conn.setRequestProperty("Referer", "http:/geekseek.com");
+                    conn.setInstanceFollowRedirects(false);
+                    Assert.assertEquals(302, conn.getResponseCode());
+                    Assert.assertEquals(conn.getHeaderField("Location"), "http:/geekseek.com");
+                } catch(Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        }).inspect(new Inspection() {
+            private static final long serialVersionUID = 1L;
+
+            @Inject @PicketLink
+            private ControllableAuthenticator auth;
+
+            @BeforeServlet
+            public void setup() {
+                auth.setShouldFailAuth(false);
+            }
+
+            @AfterServlet
+            public void validate() {
+                Assert.assertTrue(auth.wasCalled());
+            }
+        });
+    }
+
+    @Test
+    public void shouldReturnUnAuthorizedOnAuthFailure() throws Exception {
+        Warp.initiate(new Activity() {
+
+            @Override
+            public void perform() {
+                try {
+                    final HttpURLConnection conn = (HttpURLConnection)new URL(baseURL, "auth").openConnection();
+                    conn.setInstanceFollowRedirects(false);
+                    Assert.assertEquals(400, conn.getResponseCode());
+                } catch(Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        }).inspect(new Inspection() {
+            private static final long serialVersionUID = 1L;
+
+            @Inject @PicketLink
+            private ControllableAuthenticator auth;
+
+            @BeforeServlet
+            public void setup() {
+                auth.setShouldFailAuth(true);
+            }
+
+            @AfterServlet
+            public void validate() {
+                Assert.assertTrue(auth.wasCalled());
+            }
+        });
+    }
+}
+----
 
 [source, java]
 ----
