@@ -42,28 +42,33 @@ In practice, this means we'll need to lock down the resources for these actions 
 
 === Implementation
 
-==== Agorava and Social Authentication
+==== Supporting Software
+
+It likely doesn't benefit us much to build bespoke solutions for generalized and important layers such as security, so we'll be relying on integration with a few frameworks to help us fulfill our requirements.
+
+===== Agorava and Social Authentication
 
 http://agorava.org/[Agorava] is a library consisting of CDI beans and extensions for interaction with the predominant social networks.  Its featureset touts:
 
-* A generic portable REST client API
-* A generic API to deal with OAuth 1.0a and 2.0 services
-* A generic API to work with JSON serialization and de-serialization
+* A generic and portable REST client API
+* A generic API to work with OAuth 1.0a and 2.0 services
+* A generic API to interact with JSON serialization and de-serialization
 * A generic identification API to retrieve basic user information from a Social Service
-* Specific API for Twitter, Facebook and LinkedIn
-* A multi services manager API allowing to deal with multiple OAuth applications and sessions in the same application
-* An easy way to extend it by creating a new module for a new services
+* Specific APIs for Twitter, Facebook and LinkedIn
 
-* Agorava - Social Authentication
-** CDI integration
-** Support for Twitter, Facebook, Linkedin
-** Attempted standarized via JSR-XX, Drop, too early
+In short, we'll be using Agorava to handle our _authentication_ process and do the behind-the-scenes interaction with Twitter, enabling our sign-in integration.
 
-* PicketLink - Application level security
-** JBoss's answer to securiy on all levels
-*** IDM
-*** Application Level
-*** Container Level
+===== PicketLink - Application-level Security
+
+image:images/ch09-security/picketlink.png["PicketLink"]
+
+http://www.jboss.org/picketlink[PicketLink] is an umbrella project for security and identity management for Java Applications.  It provides the backbone of security for a variety of JBoss products, but also may be used standalone, as we'll do with GeekSeek.  There are components to support:
+
+* http://www.jboss.org/picketlink/IDM.html[IDM]; universal identity management with pluggable backends like LDAP or RDBMS
+* http://www.jboss.org/picketlink/Fed[Federation]; Federated Identity and Single-Sign-On (SSO)
+* http://www.jboss.org/picketlink/XACML.html[XACML] Oasis XACML v2.0 compliant access control engine
+
+We'll be leveraging PicketLink in GeekSeek to define our our own Authenticator responsible for integrating *ALR WHAT*???
 
 * Agorava and PicketLink hidden in Security Module
 ** Auto attaches where it's needed via Interceptors, DefaultExceptionMappers and Servlets
