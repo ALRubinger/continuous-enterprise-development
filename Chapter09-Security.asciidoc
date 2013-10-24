@@ -211,6 +211,8 @@ Here we've shown the use of PicketLink as a handy security abstraction, but we h
 
 ===== Agorava and Social Authentication
 
+image:images/ch09-security/agorava.png["Agorava"]
+
 http://agorava.org/[Agorava] is a library consisting of CDI beans and extensions for interaction with the predominant social networks.  Its featureset touts:
 
 * A generic and portable REST client API
@@ -219,13 +221,10 @@ http://agorava.org/[Agorava] is a library consisting of CDI beans and extensions
 * A generic identification API to retrieve basic user information from a Social Service
 * Specific APIs for Twitter, Facebook and LinkedIn
 
-In short, we'll be using Agorava to handle our _authentication_ process and do the behind-the-scenes interaction with Twitter, enabling our sign-in integration.
+In short, we'll be using Agorava to handle our _authentication_ process and do the behind-the-scenes interaction with Twitter, powering our sign-in integration.
 
-* Agorava and PicketLink hidden in Security Module
-** Auto attaches where it's needed via Interceptors, DefaultExceptionMappers and Servlets
-** @Produces @Current User
+Because the Twitter authentication mechanism is via OAuth, it'll benefit us to produce an Agorava +OAuthSession+ to represent the current user.  Again, we turn to a CDI producer method to handle the details in +org.cedj.geekseek.service.security.oauth.SessionProducer+:
 
-+org.cedj.geekseek.service.security.oauth.SessionProducer+
 [source,java]
 ----
 import javax.enterprise.context.SessionScoped;
@@ -237,9 +236,6 @@ import org.agorava.core.api.oauth.OAuthSession;
 import org.agorava.core.cdi.Current;
 
 public class SessionProducer implements Serializable {
-
-    private static final long serialVersionUID = 1L;
-
     @SessionScoped
     @Produces
     @Twitter
@@ -249,6 +245,8 @@ public class SessionProducer implements Serializable {
     }
 }
 ----
+
+The +@Twitter+ annotation from Agorava supplies us with an injection point to map the +OAuthSession+ into the +@Produces+ method.
 
 *** Only point 'shared' between other modules. Someone produces a @Current User == Authorized request
 *** Makes it easy to test Security Related entry points via
