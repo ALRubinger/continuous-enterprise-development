@@ -248,17 +248,8 @@ public class SessionProducer implements Serializable {
 
 The +@Twitter+ annotation from Agorava supplies us with an injection point to map the +OAuthSession+ into the +@Produces+ method.
 
-*** Only point 'shared' between other modules. Someone produces a @Current User == Authorized request
-*** Makes it easy to test Security Related entry points via
-**** Deploy custom Test scoped @Current User producer
-**** Use warp to setup authorized or not scenarios
+We also need a mechanism to initialize Agorava's settings for the OAuth application, so we have +org.cedj.geekseek.service.security.oauth.SettingsProducer+ to provide these.
 
-* OAuth via Twitter for UI
-** Agovara hidden behind PicketLink API's
-** Generates a users API token on login
-* Option to use GeekSeek API Tokens for REST api calls
-
-+org.cedj.geekseek.service.security.oauth+
 [source,java]
 ----
 import javax.annotation.PostConstruct;
@@ -310,47 +301,10 @@ public class SettingsProducer implements Serializable {
 }
 ----
 
-+org.cedj.geekseek.service.security.user.UserRegistration+ fired from OAuthAuthenticator:
-[source,java]
-----
-import javax.enterprise.event.Observes;
-import javax.inject.Inject;
+This +@Singleton+ EJB is scoped application-wide and available to all sessions needing configuration to create OAuth sessions.  We store the config data in environment variables to not couple secrets into our application, and allow our various deployment targets (local dev, staging, production, etc) to have independent configurations.
 
-import org.agorava.core.api.oauth.OAuthToken;
-import org.agorava.twitter.model.TwitterProfile;
-import org.cedj.geekseek.domain.Repository;
-import org.cedj.geekseek.domain.user.model.User;
-import org.cedj.geekseek.service.security.oauth.SuccessfulAuthentication;
+Now we can move to the business of authenticating a user via the Twitter OAuth service via Agorava.  We may extend PicketLink's +BaseAuthenticator+ to provide the necessary logic in our +org.cedj.geekseek.service.security.picketlink.OAuthAuthenticator+:
 
-public class UserRegistration {
-
-    @Inject
-    private Repository<User> repository;
-
-    public void registerUser(@Observes SuccessfulAuthentication event) {
-        TwitterProfile profile = (TwitterProfile)event.getProfile();
-
-        User user = repository.get(profile.getScreenName());
-        if(user == null) {
-            user = new User(profile.getScreenName());
-        }
-        user.setName(profile.getFullName());
-        user.setBio(profile.getDescription());
-        user.setAvatarUrl(profile.getProfileImageUrl());
-        OAuthToken token = event.getToken();
-        user.setAccessToken(token.getSecret() + "|" + token.getToken());
-        if(user.getApiToken() == null) {
-            user.setApiToken(UUID.randomUUID().toString());
-        }
-
-        repository.store(user);
-    }
-}
-----
-
-By annotating the +OAuthAuthenticator+ with +@PicketLink+, this denotes that this is the authenticator instance to be used by PicketLink.
-
-+org.cedj.geekseek.service.security.picketlink.OAuthAuthenticator+
 [source,java]
 ----
 @ApplicationScoped
@@ -430,6 +384,52 @@ public class OAuthAuthenticator extends BaseAuthenticator {
     }
 }
 ----
+
+By annotating the +OAuthAuthenticator+ with +@PicketLink+, this denotes that this is the authenticator instance to be used by PicketLink.
+
+The +authenticate+ method above uses the current (injected) +OAuthSession+ to determine whether or not we have a logged-in user, and further may extract profile information from there.  If the session is not yet connected, we may issue the redirect to the provider for access.
+
+Upon a +SuccessfulAuthentication+ event, we may take further action to store this user's information from Twitter in our datastore by observing the event in +org.cedj.geekseek.service.security.user.UserRegistration+:
+
+[source,java]
+----
+import javax.enterprise.event.Observes;
+import javax.inject.Inject;
+
+import org.agorava.core.api.oauth.OAuthToken;
+import org.agorava.twitter.model.TwitterProfile;
+import org.cedj.geekseek.domain.Repository;
+import org.cedj.geekseek.domain.user.model.User;
+import org.cedj.geekseek.service.security.oauth.SuccessfulAuthentication;
+
+public class UserRegistration {
+
+    @Inject
+    private Repository<User> repository;
+
+    public void registerUser(@Observes SuccessfulAuthentication event) {
+        TwitterProfile profile = (TwitterProfile)event.getProfile();
+
+        User user = repository.get(profile.getScreenName());
+        if(user == null) {
+            user = new User(profile.getScreenName());
+        }
+        user.setName(profile.getFullName());
+        user.setBio(profile.getDescription());
+        user.setAvatarUrl(profile.getProfileImageUrl());
+        OAuthToken token = event.getToken();
+        user.setAccessToken(token.getSecret() + "|" + token.getToken());
+        if(user.getApiToken() == null) {
+            user.setApiToken(UUID.randomUUID().toString());
+        }
+
+        repository.store(user);
+    }
+}
+----
+
+When the +SuccessfulAuthentication+ event is fired from the +OAuthAuthenticator+, our +UserRegistration+ bean will set the appropriate fields in our own data model, then persist via the injected +Repository+.
+
 
 === Requirement Test Scenarios
 
