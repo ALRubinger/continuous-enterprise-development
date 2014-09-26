@@ -1,5 +1,7 @@
 package org.cedj.geekseek.service.security.test.arquillian;
 
+import java.util.Set;
+
 import org.openqa.selenium.By;
 import org.openqa.selenium.Cookie;
 import org.openqa.selenium.WebDriver;
@@ -42,7 +44,7 @@ public class TwitterLogin {
 
             submit.click();
 
-            Cookie session = driver.manage().getCookieNamed("JSESSIONID");
+            final Cookie session = driver.manage().getCookieNamed("_twitter_sess");
             sessionId = session.getValue();
         } catch (Exception e) {
             throw new RuntimeException(e);
