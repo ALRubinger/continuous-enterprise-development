@@ -1,7 +1,5 @@
 package org.cedj.geekseek.service.security.test.arquillian;
 
-import java.util.Set;
-
 import org.openqa.selenium.By;
 import org.openqa.selenium.Cookie;
 import org.openqa.selenium.WebDriver;
